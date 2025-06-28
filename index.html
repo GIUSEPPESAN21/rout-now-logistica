@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rout Now | Logística Inteligente</title>
+
+    <!-- Leaflet CSS y Tailwind CSS (sin cambios) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Estilos personalizados (actualizados para monitoreo) -->
+    <style>
+        .leaflet-popup-content-wrapper { border-radius: 8px; }
+        .parada-icon {
+            color: white; border-radius: 50%; width: 28px; height: 28px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 12px; font-weight: bold; border: 2px solid white;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.7);
+        }
+        .depot-icon {
+            background-color: #f59e0b; color: black; border: 2px solid black;
+            border-radius: 5px; padding: 4px 6px; font-weight: bold; font-size: 14px;
+        }
+        /* Ícono para vehículos en monitoreo */
+        .vehicle-icon svg {
+            filter: drop-shadow(2px 2px 2px rgba(0,0,0,0.5));
+            transition: transform 0.2s ease-in-out;
+        }
+        .vehicle-icon:hover svg {
+            transform: scale(1.1);
+        }
+        #map { cursor: crosshair; }
+        .loader {
+            border: 4px solid #f3f3f3; border-top: 4px solid #3498db;
+            border-radius: 50%; width: 24px; height: 24px; animation: spin 1s linear infinite;
+            display: inline-block; margin-right: 8px;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="bg-gray-100 flex h-screen overflow-hidden font-sans">
+
+    <!-- Sidebar -->
+    <div id="sidebar" class="w-full md:w-96 bg-white shadow-2xl p-6 overflow-y-auto flex flex-col space-y-6">
+        <div class="text-center">
+            <h2 class="text-2xl font-bold text-gray-800">Rout Now</h2>
+            <p class="text-sm text-gray-500">Logística Inteligente con IA</p>
+        </div>
+
+        <!-- Cargar Paradas -->
+        <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
+            <h3 class="text-lg font-semibold text-gray-700 mb-3">1. Cargar Paradas</h3>
+            <input type="file" id="file-upload" accept=".csv" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 mb-3">
+            <button id="load-file-btn" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300 ease-in-out flex items-center justify-center">
+                Cargar Archivo CSV
+            </button>
+            <p id="file-status" class="text-xs text-gray-600 mt-2 text-center"></p>
+        </div>
+
+        <!-- Vehículos -->
+        <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
+            <h3 class="text-lg font-semibold text-gray-700 mb-3">2. Flota de Vehículos</h3>
+            <div id="vehicle-list" class="max-h-32 overflow-y-auto mb-3 space-y-2 pr-2"></div>
+            <button id="add-vehicle-btn" class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300 ease-in-out">Añadir Vehículo</button>
+        </div>
+
+        <!-- Acciones -->
+        <div class="bg-gray-50 p-4 rounded-lg border border-gray-200 space-y-3">
+             <button id="optimize-btn" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 px-4 rounded-lg transition duration-300 ease-in-out text-base flex items-center justify-center">
+                <span id="optimize-btn-text">3. Optimizar Rutas</span>
+                <span id="optimize-loader" class="loader" style="display: none;"></span>
+             </button>
+             <button id="clear-all-btn" class="w-full bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300 ease-in-out">Limpiar Todo</button>
+        </div>
+
+        <!-- Resultados -->
+        <div class="flex-grow flex flex-col mt-4">
+             <h3 class="text-lg font-semibold text-gray-700 mb-2">Resultados y Asistente IA</h3>
+             <div id="results-output" class="flex-grow bg-gray-800 text-white font-mono text-xs p-4 rounded-lg overflow-y-auto whitespace-pre-wrap">Conectando con el sistema...</div>
+        </div>
+    </div>
+
+    <!-- Contenedor del Mapa -->
+    <div id="map-container" class="flex-grow h-screen">
+        <div id="map" class="h-full"></div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <!-- ================================================================== -->
+    <!-- ========= INICIO DE LA SECCIÓN DE FIREBASE ========================= -->
+    <!-- ================================================================== -->
+
+    <script type="module">
+        // Importa las funciones que necesitas de los SDKs
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-app.js";
+        import { getFirestore, collection, onSnapshot, doc, addDoc, deleteDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-firestore.js";
+
+        // --- 1. CONFIGURACIÓN DE FIREBASE ---
+        // ¡LISTO! ESTAS SON TUS CLAVES. NO NECESITAS MODIFICAR ESTO.
+        const firebaseConfig = {
+          apiKey: "AIzaSyA6w2bT0JQ6BfBuwCIOtwzMDl60srG5Lfg",
+          authDomain: "rout-now.firebaseapp.com",
+          projectId: "rout-now",
+          storageBucket: "rout-now.appspot.com",
+          messagingSenderId: "161024391825",
+          appId: "1:161024391825:web:06647ceece37af92191d30",
+          measurementId: "G-TTJ293EC0F"
+        };
+
+        // --- 2. INICIALIZACIÓN DE SERVICIOS ---
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        console.log("Firebase conectado desde el frontend.");
+
+        // --- 3. ESTADO GLOBAL DE LA APLICACIÓN ---
+        const API_BASE_URL = '/api'; // La URL de tu backend en Python
+        const initialCoords = [3.9039, -76.2987]; // Buga, Colombia
+        const initialZoom = 14;
+        let paradaMarkers = {};
+        let vehicleMarkers = {};
+        let routeLayers = L.layerGroup();
+        let depotMarker = null;
+        let depotCoords = null;
+        const routeColors = ['#e6194B', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe', '#008080'];
+
+        // --- 4. INICIALIZACIÓN DEL MAPA ---
+        const map = L.map('map').setView(initialCoords, initialZoom);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+        routeLayers.addTo(map);
+
+        // --- 5. REFERENCIAS AL DOM ---
+        const fileUploadInput = document.getElementById('file-upload');
+        const loadFileBtn = document.getElementById('load-file-btn');
+        const vehicleListDiv = document.getElementById('vehicle-list');
+        const addVehicleBtn = document.getElementById('add-vehicle-btn');
+        const optimizeBtn = document.getElementById('optimize-btn');
+        const clearAllBtn = document.getElementById('clear-all-btn');
+        const resultsOutputDiv = document.getElementById('results-output');
+        const fileStatusP = document.getElementById('file-status');
+        const optimizeBtnText = document.getElementById('optimize-btn-text');
+        const optimizeLoader = document.getElementById('optimize-loader');
+
+        // ==================================================================
+        // --- FUNCIONES DE INTERACCIÓN CON EL MAPA Y FIREBASE ---
+        // ==================================================================
+
+        function getColorCode(colorName) {
+            const colorMap = { 'rojo': '#ef4444', 'negro': '#1f2937', 'verde': '#22c55e' };
+            return colorMap[colorName] || '#6b7280';
+        }
+
+        function dibujarParadaMapa(parada) {
+            if (!parada || typeof parada.lat !== 'number' || typeof parada.lon !== 'number') return;
+            const popupContent = `<div class="p-1"><b class="text-gray-800">${parada.nombre || `Parada ${parada.id.substring(0, 5)}`}</b><br>Pasajeros: ${parada.pasajeros || 'N/A'}<br><button class="remove-parada-btn mt-2 w-full text-xs bg-red-500 hover:bg-red-600 text-white font-bold py-1 px-2 rounded transition-colors" data-parada-id="${parada.id}">Eliminar</button></div>`;
+            const icon = L.divIcon({
+                html: `<div class="parada-icon" style="background-color: ${getColorCode(parada.color)};">P</div>`,
+                className: '', iconSize: [28, 28], iconAnchor: [14, 28]
+            });
+            paradaMarkers[parada.id] = L.marker([parada.lat, parada.lon], { icon: icon }).addTo(map).bindPopup(popupContent);
+        }
+
+        function dibujarVehiculoMapa(vehicleId, vehicleData) {
+            const vehiclePopup = `<b>Vehículo: ${vehicleId}</b><br>Estado: ${vehicleData.status || 'Desconocido'}<br>Actualizado: ${new Date(vehicleData.timestamp?.seconds * 1000).toLocaleTimeString()}`;
+            const icon = L.divIcon({
+                html: `<div class="vehicle-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="${routeColors[parseInt(vehicleId) % routeColors.length] || '#777'}" width="32px" height="32px"><path d="M21.92,7.62A1,1,0,0,0,21,7H3.45L2.56,2.3A1,1,0,0,0,1.62,1.5H1a1,1,0,0,0,0,2H2.33l2.84,12.75A3,3,0,0,0,8,19h8a3,3,0,0,0,2.82-2.75L21.92,7.62ZM8.83,16a1,1,0,0,1-.95-.78L5.15,6H20.59l-2.28,8.22a1,1,0,0,1,-.95.78Z"/><circle cx="8.5" cy="20.5" r="1.5"/><circle cx="17.5" cy="20.5" r="1.5"/></svg></div>`,
+                className: '', iconSize: [32, 32], iconAnchor: [16, 16]
+            });
+
+            if (vehicleMarkers[vehicleId]) {
+                vehicleMarkers[vehicleId].setLatLng([vehicleData.lat, vehicleData.lon]);
+                vehicleMarkers[vehicleId].getPopup().setContent(vehiclePopup);
+            } else {
+                vehicleMarkers[vehicleId] = L.marker([vehicleData.lat, vehicleData.lon], { icon: icon }).addTo(map).bindPopup(vehiclePopup);
+            }
+        }
+        
+        function dibujarDeposito(coords) {
+            if (!coords || typeof coords.lat !== 'number' || typeof coords.lon !== 'number') return;
+            if (depotMarker) map.removeLayer(depotMarker);
+            depotCoords = coords;
+            depotMarker = L.marker([coords.lat, coords.lon], {
+                icon: L.divIcon({ html: '<div class="depot-icon">D</div>', className: '', iconSize: null }),
+                draggable: true
+            }).addTo(map).bindPopup("<b>Depósito</b><br>(Arrastra para mover)");
+            depotMarker.on('dragend', function(event) {
+                const marker = event.target; const position = marker.getLatLng();
+                depotCoords.lat = position.lat; depotCoords.lon = position.lng;
+                routeLayers.clearLayers(); 
+                resultsOutputDiv.textContent += "\n\n(Depósito movido, optimiza de nuevo)";
+            });
+        }
+        
+        function drawRoutesOnMap(rutas, depotCoordsDraw, allParadas) {
+            routeLayers.clearLayers();
+            if (!Array.isArray(rutas) || !depotCoordsDraw || !allParadas) { return; }
+
+            const paradasMap = allParadas.reduce((map, parada) => {
+                map[parada.id] = parada;
+                return map;
+            }, {});
+
+            rutas.forEach((ruta, index) => {
+                const color = routeColors[index % routeColors.length];
+                const points = [[depotCoordsDraw.lat, depotCoordsDraw.lon]];
+                ruta.secuencia_paradas.forEach(paradaId => {
+                    const parada = paradasMap[paradaId];
+                    if (parada) { points.push([parada.lat, parada.lon]); }
+                });
+                points.push([depotCoordsDraw.lat, depotCoordsDraw.lon]);
+
+                if (points.length > 1) {
+                    const polyline = L.polyline(points, { color: color, weight: 5, opacity: 0.8 });
+                    polyline.bindTooltip(`Vehículo ${ruta.vehiculo_id}`, { permanent: false, direction: 'top', offset: L.point(0, -10) });
+                    routeLayers.addLayer(polyline);
+                }
+            });
+        }
+        
+        function formatOptimizationResults(results) {
+             let output = "=== RESULTADOS DE OPTIMIZACIÓN ===\n\n";
+             if (!results.rutas || results.rutas.length === 0) {
+                 return "No se generaron rutas.\nVerifica la capacidad y número de paradas.";
+             }
+             results.rutas.forEach((ruta, index) => {
+                 const distStr = (ruta.distancia_optima_m / 1000).toFixed(2);
+                 output += `--- RUTA ${index + 1} (Vehículo ${ruta.vehiculo_id}) ---\n`;
+                 output += `  Paradas:   ${ruta.paradas_info.length}\n`;
+                 output += `  Pasajeros: ${ruta.total_pasajeros} / ${ruta.capacidad_sobrecupo} (${ruta.capacidad_utilizada_pct.toFixed(1)}%)\n`;
+                 output += `  Distancia: ${distStr} km\n`;
+
+                 if (ruta.resumen_ia) {
+                     output += `\n--- Asistente Rout-IA ---\n${ruta.resumen_ia}\n\n`;
+                 }
+             });
+             return output;
+        }
+
+        // ==================================================================
+        // --- LÓGICA DE EVENTOS Y TIEMPO REAL ---
+        // ==================================================================
+
+        function escucharParadas() {
+            const paradasRef = collection(db, "paradas");
+            onSnapshot(paradasRef, (querySnapshot) => {
+                Object.values(paradaMarkers).forEach(marker => map.removeLayer(marker));
+                paradaMarkers = {};
+                let allParadas = [];
+                
+                querySnapshot.forEach((doc) => {
+                    const parada = doc.data();
+                    allParadas.push(parada);
+                    dibujarParadaMapa(parada);
+                });
+                window.currentParadas = allParadas; // Guardar globalmente para usar en la optimización
+                
+                const statusText = document.getElementById('file-status');
+                if(statusText) statusText.textContent = `${querySnapshot.size} paradas sincronizadas.`;
+                console.log("Paradas actualizadas en tiempo real.");
+            });
+        }
+
+        function escucharVehiculos() {
+            const vehiculosRef = collection(db, "vehiculos");
+            onSnapshot(vehiculosRef, (querySnapshot) => {
+                querySnapshot.docChanges().forEach((change) => {
+                    dibujarVehiculoMapa(change.doc.id, change.doc.data());
+                });
+            });
+        }
+        
+        async function onMapClick(e) {
+            const { lat, lng } = e.latlng;
+            if (!depotCoords) {
+                dibujarDeposito({ lat, lon: lng });
+                resultsOutputDiv.textContent = "Depósito definido. Ahora puedes:\n1. Añadir paradas manuales haciendo clic.\n2. Cargar un archivo CSV de paradas.";
+            } else {
+                const pasajeros = parseInt(prompt(`Pasajeros para nueva parada:`, "5"));
+                if (isNaN(pasajeros) || pasajeros <= 0) return;
+                
+                const nombre = prompt("Nombre para la parada:", `Parada ${Date.now() % 1000}`);
+                const nuevaParadaData = { nombre, lat, lon: lng, pasajeros, color: 'rojo', timestamp: serverTimestamp() };
+                
+                try {
+                    const docRef = await addDoc(collection(db, "paradas"), nuevaParadaData);
+                    // Firestore onSnapshot se encargará de dibujar la parada
+                } catch (error) {
+                    console.error("Error al añadir parada:", error);
+                    alert("Error al guardar la parada en la base de datos.");
+                }
+            }
+        }
+
+        window.eliminarParada = async function(id) {
+             if (!confirm(`¿Estás seguro de que quieres eliminar esta parada?`)) return;
+             try {
+                 await deleteDoc(doc(db, "paradas", id));
+                 routeLayers.clearLayers(); // Limpiar rutas viejas
+             } catch (error) {
+                 console.error("Error al eliminar parada:", error);
+                 alert("Error al eliminar la parada de la base de datos.");
+             }
+        }
+
+        function addVehicleInput(capacidad = '') {
+            const vehicleId = vehicleListDiv.children.length + 1;
+            const entryDiv = document.createElement('div');
+            entryDiv.className = 'flex items-center space-x-2';
+            entryDiv.innerHTML = `
+                <label for="capacidad-${vehicleId}" class="text-sm font-medium text-gray-700">Vehículo ${vehicleId}:</label>
+                <input type="number" id="capacidad-${vehicleId}" value="${capacidad}" min="1" placeholder="Capacidad" class="block w-full px-2 py-1 text-sm border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                <button title="Eliminar Vehículo" class="remove-vehicle-btn flex items-center justify-center w-6 h-6 bg-red-500 hover:bg-red-600 text-white font-bold rounded-full transition-colors">&times;</button>
+            `;
+            entryDiv.querySelector('.remove-vehicle-btn').onclick = () => {
+                entryDiv.remove();
+                // Renumerar los vehículos restantes
+                vehicleListDiv.querySelectorAll('.flex.items-center').forEach((div, i) => {
+                    div.querySelector('label').textContent = `Vehículo ${i + 1}:`;
+                });
+            };
+            vehicleListDiv.appendChild(entryDiv);
+        }
+
+        // ==================================================================
+        // --- INICIO DE LA APLICACIÓN ---
+        // ==================================================================
+
+        document.addEventListener('DOMContentLoaded', () => {
+             addVehicleInput(35); addVehicleInput(40);
+             addVehicleBtn.addEventListener('click', () => addVehicleInput());
+             
+             loadFileBtn.addEventListener('click', async () => {
+                 const file = fileUploadInput.files[0]; if (!file) { alert("Por favor, selecciona un archivo."); return; }
+                 fileStatusP.textContent = `Cargando ${file.name}...`; 
+                 loadFileBtn.disabled = true;
+
+                 const formData = new FormData(); formData.append('paradasFile', file);
+                 try {
+                     const response = await fetch(`${API_BASE_URL}/upload_paradas`, { method: 'POST', body: formData });
+                     const result = await response.json(); 
+                     if (!response.ok) throw new Error(result.error || 'Error desconocido del servidor');
+                     fileStatusP.textContent = result.message;
+                 } catch (error) { 
+                     alert(`Error al cargar el archivo: ${error.message}`); 
+                     fileStatusP.textContent = `Error en la carga.`;
+                 } finally { 
+                     loadFileBtn.disabled = false;
+                     fileUploadInput.value = null;
+                 }
+             });
+
+             optimizeBtn.addEventListener('click', async () => {
+                 if (!depotCoords) { alert("Define el Depósito haciendo clic en el mapa."); return; }
+                 const vehiculos = Array.from(vehicleListDiv.querySelectorAll('input')).map(input => ({ capacidad: parseInt(input.value) || 0 })).filter(v => v.capacidad > 0);
+                 if (vehiculos.length === 0) { alert("Añade al menos un vehículo con capacidad."); return; }
+                 if (!window.currentParadas || window.currentParadas.length === 0) { alert("No hay paradas para optimizar."); return; }
+
+                 optimizeBtnText.style.display = 'none';
+                 optimizeLoader.style.display = 'inline-block';
+                 optimizeBtn.disabled = true;
+                 resultsOutputDiv.textContent = "Optimizando rutas con IA, por favor espera...";
+
+                 const payload = { vehiculos, depot: depotCoords };
+                 try {
+                     const response = await fetch(`${API_BASE_URL}/optimize`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                     const results = await response.json();
+                     if (!response.ok) throw new Error(results.error);
+                     
+                     resultsOutputDiv.textContent = formatOptimizationResults(results);
+                     drawRoutesOnMap(results.rutas, results.depot, window.currentParadas);
+                 } catch (error) {
+                     resultsOutputDiv.textContent = `Error en optimización: ${error.message}`;
+                 } finally {
+                    optimizeBtnText.style.display = 'inline';
+                    optimizeLoader.style.display = 'none';
+                    optimizeBtn.disabled = false;
+                 }
+             });
+
+             clearAllBtn.addEventListener('click', () => {
+                if (confirm("¿Estás seguro de que quieres borrar TODAS las paradas de la base de datos?")) {
+                    window.currentParadas.forEach(p => deleteDoc(doc(db, "paradas", p.id)));
+                }
+             });
+
+             map.on('popupopen', e => {
+                 e.popup.getElement().querySelector('.remove-parada-btn')?.addEventListener('click', function() {
+                    const paradaId = this.getAttribute('data-parada-id');
+                    if (paradaId) window.eliminarParada(paradaId);
+                 });
+             });
+
+             map.on('click', onMapClick);
+             
+             // Iniciar la escucha en tiempo real
+             escucharParadas();
+             escucharVehiculos();
+             resultsOutputDiv.textContent = "Sistema listo. Haz clic en el mapa para definir el Depósito (D).";
+        });
+    </script>
+</body>
+</html>
