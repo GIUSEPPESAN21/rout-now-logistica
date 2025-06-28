@@ -1,17 +1,10 @@
-Servidor de Producción
 gunicorn
-
-Framework Web
 Flask
 flask-cors
-
-Lógica y Análisis de Datos
 pandas
 numpy
 scikit-learn
 python-tsp
-
-Conexión a Servicios Externos
 firebase-admin
 google-generativeai
 requests
