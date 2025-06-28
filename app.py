@@ -1,10 +1,11 @@
-# app.py (Backend con Firebase, Gemini AI, y Lógica de Negocio)
+# app.py (Backend para Despliegue en la Nube)
 
 # --- Imports Nativos y de Flask ---
 import os
 import io
 import math
 import traceback
+import json # Necesario para cargar secretos
 from datetime import datetime
 from flask import Flask, jsonify, request, Response
 from flask_cors import CORS
@@ -15,41 +16,37 @@ import numpy as np
 from sklearn.cluster import KMeans
 from python_tsp.heuristics import solve_tsp_simulated_annealing
 
-# --- Imports para Reportes ---
-try:
-    from fpdf import FPDF
-    FPDF_AVAILABLE = True
-except ImportError:
-    FPDF_AVAILABLE = False
-
 # --- Imports para Firebase y Google AI (Gemini) ---
 import firebase_admin
 from firebase_admin import credentials, firestore
 import google.generativeai as genai
 
 # ==============================================================================
-# --- CONFIGURACIÓN INICIAL Y CONEXIONES ---
+# --- CONFIGURACIÓN INICIAL Y CONEXIONES (MODIFICADO PARA LA NUBE) ---
 # ==============================================================================
 
-# --- 1. Inicialización de Firebase Admin SDK ---
-# ¡ACCIÓN REQUERIDA! Asegúrate de que tu archivo de clave se llame 'serviceAccountKey.json'
-# y esté en la misma carpeta que este script.
+# --- 1. Inicialización de Firebase Admin SDK desde variables de entorno ---
 try:
-    cred = credentials.Certificate("serviceAccountKey.json")
-    firebase_admin.initialize_app(cred)
-    db = firestore.client()
-    print(">>> Conexión con Firestore establecida con éxito.")
+    # Render cargará el contenido del JSON en esta variable de entorno
+    firebase_secret_json_str = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON')
+    if firebase_secret_json_str:
+        firebase_secret_dict = json.loads(firebase_secret_json_str)
+        cred = credentials.Certificate(firebase_secret_dict)
+        firebase_admin.initialize_app(cred)
+        db = firestore.client()
+        print(">>> Conexión con Firestore establecida con éxito desde variables de entorno.")
+    else:
+        print("!!! ADVERTENCIA: Variable de entorno FIREBASE_SERVICE_ACCOUNT_JSON no encontrada.")
+        db = None
 except Exception as e:
-    print(f"!!! ERROR: No se pudo conectar a Firebase. Verifica que 'serviceAccountKey.json' exista. Error: {e}")
+    print(f"!!! ERROR: No se pudo conectar a Firebase. Error: {e}")
     db = None
 
-# --- 2. Configuración de Google AI (Gemini) ---
-# ¡ACCIÓN REQUERIDA! Reemplaza "TU_API_KEY_DE_GEMINI" con tu clave real.
-# Obtenla desde Google AI Studio: https://aistudio.google.com/app/apikey
+# --- 2. Configuración de Google AI (Gemini) desde variables de entorno ---
 try:
-    GEMINI_API_KEY = "AIzaSyCJqbnAEBjPdOkUA6rs0CMJ93vCFUV8aas" # PEGA TU CLAVE DE GEMINI AQUÍ
-    if GEMINI_API_KEY == "TU_API_KEY_DE_GEMINI":
-        print(">>> ADVERTENCIA: La API Key de Gemini no está configurada. Las funciones de IA no estarán disponibles.")
+    GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+    if not GEMINI_API_KEY:
+        print(">>> ADVERTENCIA: La API Key de Gemini no está configurada en las variables de entorno.")
         gemini_model = None
     else:
         genai.configure(api_key=GEMINI_API_KEY)
@@ -100,7 +97,6 @@ def _parse_csv(file_stream):
     except Exception as e:
         raise ValueError(f"Error procesando CSV: {e}")
 
-# --- ¡NUEVA FUNCIÓN! Generador de Insights con Gemini AI ---
 def generar_resumen_ia(ruta_data):
     if not gemini_model:
         return "El servicio de IA no está disponible."
@@ -131,7 +127,6 @@ def generar_resumen_ia(ruta_data):
 
 # ==============================================================================
 # --- RUTAS DE LA API (ENDPOINTS) ---
-# Ahora interactúan con Firestore
 # ==============================================================================
 
 @app.route('/')
@@ -257,10 +252,6 @@ def optimize_routes_full():
         traceback.print_exc()
         return jsonify({"error": f"Error interno en optimización: {str(e)}"}), 500
 
-# ==============================================================================
-# --- EJECUCIÓN DE LA APLICACIÓN ---
-# ==============================================================================
-if __name__ == '__main__':
-    if not db:
-        print("\n!!! LA APLICACIÓN SE EJECUTARÁ SIN CONEXIÓN A LA BASE DE DATOS !!!")
-    app.run(host='0.0.0.0', port=5000, debug=True)
+# --- No necesitas la sección de ejecución local para el despliegue ---
+# if __name__ == '__main__':
+#     app.run(host='0.0.0.0', port=5000, debug=True)
